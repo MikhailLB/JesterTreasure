@@ -43,3 +43,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Signing / secrets (must never enter git — regenerate locally)
+android/key.properties
+android/app/*.jks
+android/app/*.keystore
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+build/debug_symbols/
+build/debug_info/

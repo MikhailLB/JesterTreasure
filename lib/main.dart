@@ -1,40 +1,68 @@
+import 'dart:async';
+
+import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'screens/loading_screen.dart';
+import 'core/alert_gateway.dart';
+import 'core/attribution_agent.dart';
+import 'core/local_vault.dart';
+import 'core/net_channel.dart';
+import 'core/net_sensor.dart';
+import 'core/routing_api.dart';
+import 'root_app.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Allow all orientations during the loading screen. The game locks to
-  // portrait when the menu appears.
-  SystemChrome.setPreferredOrientations(<DeviceOrientation>[
+
+  // Firebase + AppCheck — best-effort. The gray flow still works if the
+  // Firebase project has not been wired yet (the config endpoint just
+  // won't receive `push_token` / `firebase_project_id`).
+  try {
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp();
+    }
+    await FirebaseAppCheck.instance.activate(
+      androidProvider: kDebugMode
+          ? AndroidProvider.debug
+          : AndroidProvider.playIntegrity,
+    );
+  } catch (_) {}
+
+  // Allow every orientation. Individual stages tighten this if needed
+  // (arena locks to portrait via MenuScreen when the game starts).
+  await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
     DeviceOrientation.landscapeLeft,
     DeviceOrientation.landscapeRight,
   ]);
-  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-  runApp(const JesterTreasureApp());
-}
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+  ));
 
-class JesterTreasureApp extends StatelessWidget {
-  const JesterTreasureApp({super.key});
+  await netChannel.boot();
 
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Jester Treasure',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        fontFamily: 'sans-serif',
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFFFFC107),
-          brightness: Brightness.dark,
-        ),
-        scaffoldBackgroundColor: const Color(0xFF1A0B2E),
-      ),
-      home: const LoadingScreen(),
-    );
-  }
+  final vault = LocalVault();
+  await vault.warmUp();
+
+  final netSensor = NetSensor();
+  final attribution = AttributionAgent();
+  final routingApi = RoutingApi(vault);
+  final gateway = AlertGateway(vault);
+
+  // Start the FCM pipeline early; token is optional for the first config
+  // request (arrives on next launch or on rotate).
+  unawaited(gateway.ignite());
+
+  runApp(JesterTreasureShell(
+    vault: vault,
+    netSensor: netSensor,
+    attribution: attribution,
+    routingApi: routingApi,
+    gateway: gateway,
+  ));
 }

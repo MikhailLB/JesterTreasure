@@ -1,33 +1,38 @@
+// Jester Treasure — mini WebView for legal/support pages surfaced from
+// the arena menu. Uses the same user-agent as the portal so tracking
+// domains treat every touch consistently.
+
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
-class WebViewScreen extends StatefulWidget {
-  const WebViewScreen({super.key, required this.title, required this.url});
+import '../core/net_channel.dart';
 
+class LegalStage extends StatefulWidget {
   final String title;
   final String url;
 
+  const LegalStage({super.key, required this.title, required this.url});
+
   @override
-  State<WebViewScreen> createState() => _WebViewScreenState();
+  State<LegalStage> createState() => _LegalStageState();
 }
 
-class _WebViewScreenState extends State<WebViewScreen> {
+class _LegalStageState extends State<LegalStage> {
   late final WebViewController _controller;
   int _progress = 0;
-  bool _loaded = false;
+  bool _done = false;
 
   @override
   void initState() {
     super.initState();
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setUserAgent(netChannel.userAgent)
       ..setBackgroundColor(const Color(0xFF1A0B2E))
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onProgress: (int p) => setState(() => _progress = p),
-          onPageFinished: (_) => setState(() => _loaded = true),
-        ),
-      )
+      ..setNavigationDelegate(NavigationDelegate(
+        onProgress: (p) => setState(() => _progress = p),
+        onPageFinished: (_) => setState(() => _done = true),
+      ))
       ..loadRequest(Uri.parse(widget.url));
   }
 
@@ -54,9 +59,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
       body: Stack(
         children: <Widget>[
           WebViewWidget(controller: _controller),
-          if (!_loaded)
+          if (!_done)
             LinearProgressIndicator(
-              value: _progress / 100,
+              value: _progress / 100.0,
               backgroundColor: Colors.black26,
               valueColor: const AlwaysStoppedAnimation<Color>(
                 Color(0xFFFFC107),

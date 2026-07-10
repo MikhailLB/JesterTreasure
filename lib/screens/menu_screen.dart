@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../stages/legal_stage.dart';
 import 'game_screen.dart';
-import 'webview_screen.dart';
 
 class MenuScreen extends StatefulWidget {
   const MenuScreen({super.key});
@@ -64,7 +64,7 @@ class _MenuScreenState extends State<MenuScreen>
   void _openWebView(String title, String url) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => WebViewScreen(title: title, url: url),
+        builder: (_) => LegalStage(title: title, url: url),
       ),
     );
   }
