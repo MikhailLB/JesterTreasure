@@ -8,31 +8,27 @@
 import 'cipher.dart';
 
 // -- AppsFlyer dev key ---------------------------------------------
-// TODO(prod): replace once the real AF_DEV_KEY is issued and re-mint.
+// Minted from KV8a2EpNUBCF8z36uM4LHD via tool/mint_secrets.dart.
 const List<int> _attributionKeyBytes = <int>[
-  0xf1, 0x17, 0x0d, 0x0a, 0x63, 0xf2, 0xc4, 0xce, 0xe6, 0xf9, 0xf2, 0x75,
-  0xe5, 0x82, 0x45, 0xe9, 0xfe, 0xc0, 0x64, 0xd8, 0x09, 0xd0,
+  0xfb, 0x07, 0x6a, 0x2f, 0x14, 0xe1, 0xeb, 0xcb, 0xf6, 0xe2, 0xee, 0x63,
+  0x91, 0xb9, 0x35, 0x9a, 0xc3, 0xc2, 0x1c, 0xd0, 0x04, 0xc6,
 ];
 
 String attributionKey() {
   if (_attributionKeyBytes.isEmpty) return '';
-  final v = unveil(_attributionKeyBytes);
-  if (v.contains('PLACEHOLDER')) return '';
-  return v;
+  return unveil(_attributionKeyBytes);
 }
 
 // -- Firebase project number ---------------------------------------
-// TODO(prod): replace with the real project number once google-services
-// JSON is provided.
+// Minted from 48216277421 (Firebase project jestertreasure-e007c) via
+// tool/mint_secrets.dart.
 const List<int> _messagingProjectBytes = <int>[
-  0x80, 0x61, 0x62, 0x7e, 0x16, 0x94, 0xab, 0xb5, 0x93, 0x90, 0x9d, 0x15,
+  0x84, 0x69, 0x60, 0x7f, 0x10, 0x96, 0xac, 0xb2, 0x97, 0x92, 0x9c,
 ];
 
 String messagingProjectId() {
   if (_messagingProjectBytes.isEmpty) return '';
-  final v = unveil(_messagingProjectBytes);
-  if (v == '000000000000') return '';
-  return v;
+  return unveil(_messagingProjectBytes);
 }
 
 // -- GCD (Get Conversion Data) endpoint ----------------------------

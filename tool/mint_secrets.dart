@@ -19,8 +19,8 @@ void main() {
   final entries = <String, String>{
     'ROUTING_HOST      ': 'https://jestertreasure.com',
     'ROUTING_PATH      ': '/config.php',
-    'ATTRIBUTION_KEY   ': 'AF_DEV_KEY_PLACEHOLDER',
-    'MESSAGING_PROJECT ': '000000000000',
+    'ATTRIBUTION_KEY   ': 'KV8a2EpNUBCF8z36uM4LHD',
+    'MESSAGING_PROJECT ': '48216277421',
     'GCD_HOST          ': 'https://gcdsdk.appsflyer.com',
     'GCD_PATH          ': '/install_data/v4.0/',
     'UA_CHROME_FRAGMENT': '149.0.7827.163',
