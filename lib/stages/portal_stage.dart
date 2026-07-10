@@ -240,17 +240,41 @@ class _PortalStageState extends State<PortalStage>
       if (mounted) setState(() => _spinning = false);
       return;
     }
-    _routeToTempest();
+    await _routeToTempest();
   }
 
-  void _routeToTempest() {
+  Future<void> _routeToTempest() async {
     if (_routedToTempest || !mounted) return;
     _routedToTempest = true;
+
+    // Snapshot whatever page the user was actually on so that when the
+    // network comes back and they tap "Try again", the WebView reloads
+    // exactly that URL — not the original landing page we booted with.
+    String resumeUrl = widget.url;
+    try {
+      final current = await _web.currentUrl();
+      if (current != null && current.isNotEmpty) {
+        final uri = Uri.tryParse(current);
+        if (uri != null &&
+            (uri.scheme == 'http' || uri.scheme == 'https') &&
+            uri.hasAuthority) {
+          resumeUrl = current;
+        }
+      }
+    } catch (_) {}
+    // Fall back to the last main-frame URL if we captured it earlier.
+    if (_lastMainFrameUrl != null &&
+        _lastMainFrameUrl!.isNotEmpty &&
+        resumeUrl == widget.url) {
+      resumeUrl = _lastMainFrameUrl!;
+    }
+
+    if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
         builder: (_) => TempestStage(
           onRetry: (_) => PortalStage(
-            url: widget.url,
+            url: resumeUrl,
             vault: widget.vault,
             gateway: widget.gateway,
             netSensor: widget.netSensor,
@@ -416,18 +440,16 @@ class _PortalStageState extends State<PortalStage>
         body: Stack(
           fit: StackFit.expand,
           children: <Widget>[
+            // One-source-of-truth safe-area handling. SafeArea already
+            // pads by viewPadding on all edges; wrapping it in another
+            // Padding that adds viewPadding.left/right (as the earlier
+            // version did) doubles the inset in landscape.
             SafeArea(
+              top: true,
+              left: true,
+              right: true,
               bottom: false,
-              child: Padding(
-                padding: MediaQuery.of(context).orientation ==
-                        Orientation.landscape
-                    ? EdgeInsets.only(
-                        left: MediaQuery.of(context).viewPadding.left,
-                        right: MediaQuery.of(context).viewPadding.right,
-                      )
-                    : EdgeInsets.zero,
-                child: WebViewWidget(controller: _web),
-              ),
+              child: WebViewWidget(controller: _web),
             ),
             if (_spinning)
               const Positioned.fill(

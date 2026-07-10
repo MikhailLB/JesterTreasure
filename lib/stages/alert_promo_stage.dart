@@ -1,29 +1,32 @@
 // Jester Treasure — push permission promo screen.
 //
 // Full-screen artwork with two overlaid buttons: primary "Accept"
-// (asks for the OS permission), secondary "Skip" (snoozes the promo
-// for the configured cooldown). The button visuals intentionally differ
-// from every other project's version — twin gemstone plaques rather
-// than the pill+text-link pattern used elsewhere.
+// (asks for the OS permission) and secondary "Skip" (snoozes the promo
+// for the configured cooldown). Once the user picks, the stage
+// self-navigates to the portal — the router is never re-entered so
+// there is no risk of an orphaned `mounted=false` closure blocking the
+// hand-off (that was the "Accept freezes the app" bug in the first cut).
 
 import 'package:flutter/material.dart';
 
 import '../core/alert_gateway.dart';
 import '../core/local_vault.dart';
+import '../core/net_sensor.dart';
 import '../env/app_facade.dart';
-
-typedef PromoResolver = Future<void> Function();
+import 'portal_stage.dart' deferred as portal;
 
 class AlertPromoStage extends StatefulWidget {
   final LocalVault vault;
   final AlertGateway gateway;
-  final PromoResolver onResolved;
+  final NetSensor netSensor;
+  final String portalUrl;
 
   const AlertPromoStage({
     super.key,
     required this.vault,
     required this.gateway,
-    required this.onResolved,
+    required this.netSensor,
+    required this.portalUrl,
   });
 
   @override
@@ -36,12 +39,17 @@ class _AlertPromoStageState extends State<AlertPromoStage> {
   Future<void> _onAccept() async {
     if (_handling) return;
     setState(() => _handling = true);
-    final granted = await widget.gateway.askOsPermission();
-    if (!granted) {
-      await _snooze();
+    try {
+      final granted = await widget.gateway.askOsPermission();
+      if (!granted) {
+        await _snooze();
+      }
+    } catch (_) {
+      // Even if the request throws (Firebase not configured, etc.), we
+      // MUST still forward the user to the portal.
     }
     if (!mounted) return;
-    await widget.onResolved();
+    await _forwardToPortal();
   }
 
   Future<void> _onSkip() async {
@@ -49,13 +57,29 @@ class _AlertPromoStageState extends State<AlertPromoStage> {
     setState(() => _handling = true);
     await _snooze();
     if (!mounted) return;
-    await widget.onResolved();
+    await _forwardToPortal();
   }
 
   Future<void> _snooze() async {
     final until = DateTime.now().millisecondsSinceEpoch ~/ 1000 +
         AppFacade.alertPromoSnoozeSeconds;
     await widget.vault.stampPromoSnooze(until);
+  }
+
+  Future<void> _forwardToPortal() async {
+    await portal.loadLibrary();
+    await portal.primePortalEngine();
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => portal.PortalStage(
+          url: widget.portalUrl,
+          vault: widget.vault,
+          gateway: widget.gateway,
+          netSensor: widget.netSensor,
+        ),
+      ),
+    );
   }
 
   @override
@@ -66,6 +90,10 @@ class _AlertPromoStageState extends State<AlertPromoStage> {
     final backdrop = isLandscape
         ? 'assets/Horizontal_Notification_GREY.webp'
         : 'assets/Vertical_Notification_GREY.webp';
+
+    // Same width for Accept and Skip; landscape uses a much smaller
+    // fraction so the plaques don't dominate the artwork.
+    final buttonWidth = isLandscape ? size.width * 0.26 : size.width * 0.62;
 
     return Scaffold(
       backgroundColor: const Color(0xFF10061F),
@@ -79,7 +107,7 @@ class _AlertPromoStageState extends State<AlertPromoStage> {
               backdrop,
               fit: BoxFit.cover,
               gaplessPlayback: true,
-              errorBuilder: (_, __, ___) =>
+              errorBuilder: (_, _, _) =>
                   const ColoredBox(color: Color(0xFF10061F)),
             ),
             IgnorePointer(
@@ -97,70 +125,39 @@ class _AlertPromoStageState extends State<AlertPromoStage> {
                 ),
               ),
             ),
-            _ButtonDock(
-              landscape: isLandscape,
-              width: size.width,
-              height: size.height,
-              handling: _handling,
-              onAccept: _onAccept,
-              onSkip: _onSkip,
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: isLandscape ? size.height * 0.06 : size.height * 0.09,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  SizedBox(
+                    width: buttonWidth,
+                    child: _GemPlaque(
+                      text: 'ACCEPT',
+                      compact: isLandscape,
+                      disabled: _handling,
+                      onTap: _onAccept,
+                      tone: _PlaqueTone.gold,
+                    ),
+                  ),
+                  SizedBox(height: isLandscape ? 8 : 12),
+                  SizedBox(
+                    width: buttonWidth,
+                    child: _GemPlaque(
+                      text: 'SKIP',
+                      compact: isLandscape,
+                      disabled: _handling,
+                      onTap: _onSkip,
+                      tone: _PlaqueTone.slate,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _ButtonDock extends StatelessWidget {
-  final bool landscape;
-  final double width;
-  final double height;
-  final bool handling;
-  final VoidCallback onAccept;
-  final VoidCallback onSkip;
-
-  const _ButtonDock({
-    required this.landscape,
-    required this.width,
-    required this.height,
-    required this.handling,
-    required this.onAccept,
-    required this.onSkip,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final acceptWidth = landscape ? width * 0.34 : width * 0.72;
-    final skipWidth = landscape ? width * 0.24 : width * 0.5;
-
-    return Positioned(
-      left: 0,
-      right: 0,
-      bottom: landscape ? height * 0.07 : height * 0.09,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          SizedBox(
-            width: acceptWidth,
-            child: _GemPlaque(
-              text: 'ACCEPT',
-              disabled: handling,
-              onTap: onAccept,
-              tone: _PlaqueTone.gold,
-            ),
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: skipWidth,
-            child: _GemPlaque(
-              text: 'SKIP',
-              disabled: handling,
-              onTap: onSkip,
-              tone: _PlaqueTone.slate,
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -170,12 +167,14 @@ enum _PlaqueTone { gold, slate }
 
 class _GemPlaque extends StatefulWidget {
   final String text;
+  final bool compact;
   final bool disabled;
   final VoidCallback onTap;
   final _PlaqueTone tone;
 
   const _GemPlaque({
     required this.text,
+    required this.compact,
     required this.disabled,
     required this.onTap,
     required this.tone,
@@ -205,10 +204,14 @@ class _GemPlaqueState extends State<_GemPlaque> {
     final borderColor =
         isGold ? const Color(0xFFFFF7CF) : const Color(0xFFB78BE0);
     final textColor = isGold ? const Color(0xFF20100C) : Colors.white;
+    final vPad = widget.compact ? 10.0 : 16.0;
+    final fontSize = widget.compact ? 14.0 : (isGold ? 20.0 : 17.0);
+    final gemSize = widget.compact ? 7.0 : 10.0;
 
     return Opacity(
       opacity: widget.disabled ? 0.55 : 1.0,
       child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTapDown: (_) {
           if (widget.disabled) return;
           setState(() => _pressed = true);
@@ -223,7 +226,7 @@ class _GemPlaqueState extends State<_GemPlaque> {
           scale: _pressed ? 0.94 : 1.0,
           duration: const Duration(milliseconds: 90),
           child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 16),
+            padding: EdgeInsets.symmetric(vertical: vPad),
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
@@ -236,46 +239,46 @@ class _GemPlaqueState extends State<_GemPlaque> {
                 if (isGold)
                   const BoxShadow(
                     color: Color(0x99FFB300),
-                    blurRadius: 22,
+                    blurRadius: 20,
                     spreadRadius: 1,
-                    offset: Offset(0, 6),
+                    offset: Offset(0, 5),
                   )
                 else
                   const BoxShadow(
                     color: Color(0x77000000),
-                    blurRadius: 14,
-                    offset: Offset(0, 6),
+                    blurRadius: 12,
+                    offset: Offset(0, 5),
                   ),
               ],
             ),
-            child: Center(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: <Widget>[
-                  _CornerGem(
-                    color: isGold
-                        ? const Color(0xFF7A1B12)
-                        : const Color(0xFFB78BE0),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                _CornerGem(
+                  size: gemSize,
+                  color: isGold
+                      ? const Color(0xFF7A1B12)
+                      : const Color(0xFFB78BE0),
+                ),
+                SizedBox(width: widget.compact ? 8 : 12),
+                Text(
+                  widget.text,
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: fontSize,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: widget.compact ? 1.6 : 2.2,
                   ),
-                  const SizedBox(width: 12),
-                  Text(
-                    widget.text,
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: isGold ? 20 : 17,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 2.2,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  _CornerGem(
-                    color: isGold
-                        ? const Color(0xFF187B23)
-                        : const Color(0xFFB78BE0),
-                  ),
-                ],
-              ),
+                ),
+                SizedBox(width: widget.compact ? 8 : 12),
+                _CornerGem(
+                  size: gemSize,
+                  color: isGold
+                      ? const Color(0xFF187B23)
+                      : const Color(0xFFB78BE0),
+                ),
+              ],
             ),
           ),
         ),
@@ -285,16 +288,17 @@ class _GemPlaqueState extends State<_GemPlaque> {
 }
 
 class _CornerGem extends StatelessWidget {
+  final double size;
   final Color color;
-  const _CornerGem({required this.color});
+  const _CornerGem({required this.size, required this.color});
 
   @override
   Widget build(BuildContext context) {
     return Transform.rotate(
       angle: 0.785398, // 45°
       child: Container(
-        width: 10,
-        height: 10,
+        width: size,
+        height: size,
         decoration: BoxDecoration(
           color: color,
           borderRadius: BorderRadius.circular(2),

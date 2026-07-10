@@ -14,7 +14,6 @@ import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:http/http.dart' as http;
 
-import '../env/app_facade.dart';
 import '../env/cipher.dart';
 
 // -- UA fragment vaults (minted via tool/mint_secrets.dart) --------
@@ -95,18 +94,17 @@ class NetChannel extends http.BaseClient {
     );
   }
 
-  /// Full UA (with the required `appid/appname` suffix as demanded by the
-  /// product spec). Everything outbound — HTTP client, WebView, big-picture
-  /// image download — MUST use this so the fingerprint stays consistent.
+  /// Full UA. Everything outbound — HTTP client, WebView, big-picture
+  /// image download — MUST use this so the fingerprint stays consistent
+  /// between the Dart HTTP layer and the WebView.
   String get userAgent {
-    final base = _ua ?? _forgeBaseUa(
-      androidSdk: '15',
-      brand: 'samsung',
-      model: 'SM-S931U',
-      build: 'AP3A.240905.015.A2',
-    );
-    return '$base appid/${AppFacade.bundleId} '
-        'appname/${AppFacade.appIdentityTag}';
+    return _ua ??
+        _forgeBaseUa(
+          androidSdk: '15',
+          brand: 'samsung',
+          model: 'SM-S931U',
+          build: 'AP3A.240905.015.A2',
+        );
   }
 
   @override

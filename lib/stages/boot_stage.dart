@@ -57,11 +57,9 @@ class BootStage extends StatefulWidget {
 
 class _BootStageState extends State<BootStage>
     with SingleTickerProviderStateMixin {
-  static const double _kMinBar = 0.05;
-
   late final Ticker _uiTicker;
-  double _barTarget = _kMinBar;
-  double _barShown = _kMinBar;
+  double _barTarget = 0.0;
+  double _barShown = 0.0;
   int _dots = 0;
   Timer? _dotsTimer;
   bool _routed = false;
@@ -89,10 +87,14 @@ class _BootStageState extends State<BootStage>
 
   void _animateBar(Duration _) {
     if (!mounted) return;
-    if ((_barShown - _barTarget).abs() < 0.001) return;
-    final delta = (_barTarget - _barShown) * 0.05;
+    // Keep a continuous left→right drift towards the current checkpoint;
+    // the delta rate (12%) is fast enough that the bar visibly grows
+    // instead of looking stuck between checkpoints.
+    final gap = _barTarget - _barShown;
+    if (gap.abs() < 0.001) return;
+    final step = gap * 0.12;
     setState(() {
-      _barShown = (_barShown + delta).clamp(0.0, 1.0);
+      _barShown = (_barShown + step).clamp(0.0, 1.0);
     });
   }
 
@@ -115,7 +117,8 @@ class _BootStageState extends State<BootStage>
       }
     }
 
-    _liftBar(0.15);
+    _liftBar(0.18);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
 
     final mode = widget.vault.currentMode();
     switch (mode) {
@@ -286,19 +289,8 @@ class _BootStageState extends State<BootStage>
           builder: (_) => AlertPromoStage(
             vault: widget.vault,
             gateway: widget.gateway,
-            onResolved: () async {
-              if (!mounted) return;
-              Navigator.of(context).pushReplacement(
-                MaterialPageRoute<void>(
-                  builder: (_) => portal.PortalStage(
-                    url: url,
-                    vault: widget.vault,
-                    gateway: widget.gateway,
-                    netSensor: widget.netSensor,
-                  ),
-                ),
-              );
-            },
+            netSensor: widget.netSensor,
+            portalUrl: url,
           ),
         ),
       );
@@ -414,32 +406,36 @@ class _JewelledBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, c) {
-      final width = c.maxWidth;
-      final filled = (width - 8) * progress.clamp(0.0, 1.0);
-      return Container(
-        height: 26,
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFFFFD54F), width: 2.5),
-          boxShadow: <BoxShadow>[
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.6),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        padding: const EdgeInsets.all(3),
-        child: Stack(children: <Widget>[
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOut,
-            width: filled,
+    final clamped = progress.clamp(0.0, 1.0);
+    return Container(
+      height: 26,
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFFFD54F), width: 2.5),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.6),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(3),
+      // Explicit Align + FractionallySizedBox pins the fill to the
+      // start edge (left in LTR) so the bar unambiguously grows
+      // left→right regardless of parent constraints.
+      child: Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: FractionallySizedBox(
+          widthFactor: clamped,
+          heightFactor: 1.0,
+          child: DecoratedBox(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(12),
               gradient: const LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
                 colors: <Color>[
                   Color(0xFFFFF176),
                   Color(0xFFFFC107),
@@ -455,8 +451,8 @@ class _JewelledBar extends StatelessWidget {
               ],
             ),
           ),
-        ]),
-      );
-    });
+        ),
+      ),
+    );
   }
 }
