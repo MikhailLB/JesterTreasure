@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
@@ -12,6 +10,7 @@ import 'core/local_vault.dart';
 import 'core/net_channel.dart';
 import 'core/net_sensor.dart';
 import 'core/routing_api.dart';
+import 'core/session_bridge.dart';
 import 'root_app.dart';
 
 Future<void> main() async {
@@ -54,9 +53,23 @@ Future<void> main() async {
   final routingApi = RoutingApi(vault);
   final gateway = AlertGateway(vault);
 
-  // Start the FCM pipeline early; token is optional for the first config
-  // request (arrives on next launch or on rotate).
-  unawaited(gateway.ignite());
+  // Register the shell-level fallback for warm push taps BEFORE we
+  // ignite the FCM pipeline. If a background push arrives during boot,
+  // it will land in this handler and either open the portal directly
+  // (once the navigator is up) or persist the URL as a cold-tap
+  // payload for the next BootStage pass.
+  SessionBridge.seed(vault: vault, netSensor: netSensor, gateway: gateway);
+  gateway.onWarmLink = SessionBridge.launchPortal;
+
+  // Await [ignite] so `getInitialMessage` has actually returned before
+  // BootStage starts checking the vault for a cold-tap URL. Otherwise
+  // a fresh cold-start push tap races the router and gets missed.
+  try {
+    await gateway.ignite().timeout(const Duration(seconds: 4));
+  } catch (_) {
+    // Firebase or FCM not reachable — arena / portal flow still works
+    // without push, so we swallow and keep going.
+  }
 
   runApp(JesterTreasureShell(
     vault: vault,

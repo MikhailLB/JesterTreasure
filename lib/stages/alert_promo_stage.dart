@@ -13,7 +13,7 @@ import '../core/alert_gateway.dart';
 import '../core/local_vault.dart';
 import '../core/net_sensor.dart';
 import '../env/app_facade.dart';
-import 'portal_stage.dart' deferred as portal;
+import 'portal_stage.dart';
 
 class AlertPromoStage extends StatefulWidget {
   final LocalVault vault;
@@ -67,12 +67,11 @@ class _AlertPromoStageState extends State<AlertPromoStage> {
   }
 
   Future<void> _forwardToPortal() async {
-    await portal.loadLibrary();
-    await portal.primePortalEngine();
+    await primePortalEngine();
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
-        builder: (_) => portal.PortalStage(
+        builder: (_) => PortalStage(
           url: widget.portalUrl,
           vault: widget.vault,
           gateway: widget.gateway,

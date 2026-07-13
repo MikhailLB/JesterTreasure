@@ -5,6 +5,7 @@ import 'core/attribution_agent.dart';
 import 'core/local_vault.dart';
 import 'core/net_sensor.dart';
 import 'core/routing_api.dart';
+import 'core/session_bridge.dart';
 import 'stages/boot_stage.dart';
 
 class JesterTreasureShell extends StatelessWidget {
@@ -26,8 +27,9 @@ class JesterTreasureShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'JesterTreasure',
+      title: 'Jester Treasure',
       debugShowCheckedModeBanner: false,
+      navigatorKey: rootNavigatorKey,
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(

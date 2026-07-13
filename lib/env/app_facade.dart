@@ -14,8 +14,7 @@ class AppFacade {
   // -- Immutable identity ------------------------------------------
   static const String bundleId = 'com.jestertreas.jesterstreasure';
   static const String storeId = 'com.jestertreas.jesterstreasure';
-  static const String displayName = 'JesterTreasure';
-  static const String appIdentityTag = 'JesterTreasure';
+  static const String displayName = 'Jester Treasure';
 
   // -- Routing / analytics resolvers -------------------------------
   static String get routingUrl => buildRoutingUrl();

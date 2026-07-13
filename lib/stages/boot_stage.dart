@@ -32,7 +32,7 @@ import '../data/routing_verdict.dart';
 import '../env/app_facade.dart';
 import '../screens/menu_screen.dart' as arena;
 import 'alert_promo_stage.dart';
-import 'portal_stage.dart' deferred as portal;
+import 'portal_stage.dart';
 import 'tempest_stage.dart';
 
 class BootStage extends StatefulWidget {
@@ -279,8 +279,7 @@ class _BootStageState extends State<BootStage>
     if (_routed) return;
     _routed = true;
 
-    await portal.loadLibrary();
-    await portal.primePortalEngine();
+    await primePortalEngine();
     if (!mounted) return;
 
     if (widget.vault.shouldPresentPromo()) {
@@ -299,7 +298,7 @@ class _BootStageState extends State<BootStage>
 
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
-        builder: (_) => portal.PortalStage(
+        builder: (_) => PortalStage(
           url: url,
           vault: widget.vault,
           gateway: widget.gateway,
