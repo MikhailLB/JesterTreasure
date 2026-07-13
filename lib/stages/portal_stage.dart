@@ -133,6 +133,12 @@ class _PortalStageState extends State<PortalStage>
     };
 
     _connSub = widget.netSensor.statusStream.listen(_onConnectivityChange);
+
+    // If the app booted OFFLINE, `AlertGateway.getToken()` failed
+    // silently. Reaching the portal means we now have connectivity,
+    // so nudge the gateway to retry token acquisition. Idempotent
+    // once a token is held.
+    unawaited(widget.gateway.reattemptWithNetwork());
   }
 
   @override

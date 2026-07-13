@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
@@ -64,12 +67,32 @@ Future<void> main() async {
   // Await [ignite] so `getInitialMessage` has actually returned before
   // BootStage starts checking the vault for a cold-tap URL. Otherwise
   // a fresh cold-start push tap races the router and gets missed.
+  //
+  // ignite() only awaits the OFFLINE-safe phase; the network phase
+  // (getToken / getInitialMessage) is dispatched inside and retried
+  // once the shell observes connectivity via `statusStream` below.
   try {
     await gateway.ignite().timeout(const Duration(seconds: 4));
   } catch (_) {
     // Firebase or FCM not reachable — arena / portal flow still works
     // without push, so we swallow and keep going.
   }
+
+  // Whenever the OS reports at least one live interface, retry the
+  // network-dependent parts of the FCM pipeline. Idempotent — after
+  // the first successful token pull this is essentially free.
+  netSensor.statusStream.listen((results) {
+    final isLive = results.any((r) =>
+        r == ConnectivityResult.wifi ||
+        r == ConnectivityResult.mobile ||
+        r == ConnectivityResult.ethernet ||
+        r == ConnectivityResult.vpn ||
+        r == ConnectivityResult.bluetooth ||
+        r == ConnectivityResult.other);
+    if (isLive) {
+      unawaited(gateway.reattemptWithNetwork());
+    }
+  });
 
   runApp(JesterTreasureShell(
     vault: vault,

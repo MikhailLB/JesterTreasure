@@ -4,7 +4,24 @@
 // once by `BootStage` on the next launch. Warm-tap URLs (foreground /
 // backgrounded) fire the `onWarmLink` callback; they must NEVER be persisted
 // — the product spec treats push URLs as one-shot.
+//
+// The pipeline is split into two phases so that opening the app OFFLINE
+// still lets notifications work once the network returns:
+//
+//   Phase A — [ignite]              (offline-safe, runs once)
+//     • Firebase.initializeApp
+//     • Local plugin + channel
+//     • onMessage / onMessageOpenedApp / onBackgroundMessage listeners
+//     • onTokenRefresh listener
+//
+//   Phase B — [_pullNetworkArtifacts] (needs network, retriable)
+//     • FirebaseMessaging.getToken
+//     • getInitialMessage (cold-tap URL)
+//
+// [reattemptWithNetwork] is called by the shell whenever connectivity
+// flips back on. It is idempotent — once a token is held, it no-ops.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -35,6 +52,8 @@ class AlertGateway {
   FirebaseMessaging? _fcm;
   String? _token;
   bool _booted = false;
+  bool _networkArtifactsPulled = false;
+  Future<void>? _pullFuture;
 
   /// Fires on warm foreground/background taps. Do NOT persist the URL.
   void Function(String url)? onWarmLink;
@@ -46,6 +65,9 @@ class AlertGateway {
 
   String? get pushToken => _token;
 
+  /// Phase A. Offline-safe. Registers listeners and prepares local
+  /// notifications so that a live network is not required for the
+  /// pipeline to be _ready_ — only for a token to be issued.
   Future<void> ignite() async {
     if (_booted) return;
     try {
@@ -57,26 +79,78 @@ class AlertGateway {
 
       await _prepareLocalPlugin();
 
-      _token = await _fcm!.getToken();
       _fcm!.onTokenRefresh.listen((rot) {
         _token = rot;
+        _networkArtifactsPulled = true;
         onTokenRotate?.call(rot);
       });
 
       FirebaseMessaging.onMessage.listen(_onForeground);
       FirebaseMessaging.onMessageOpenedApp.listen(_onWarmBackgroundTap);
 
-      final initial = await _fcm!.getInitialMessage();
-      if (initial != null) {
-        await _onColdTap(initial);
-      }
-
       _booted = true;
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[alert] boot failed: $e');
       }
+      return;
     }
+
+    // Fire-and-forget the network-dependent phase. If we are offline
+    // right now it will fail silently; [reattemptWithNetwork] retries
+    // once the shell observes connectivity coming back.
+    unawaited(_pullNetworkArtifacts());
+  }
+
+  /// Phase B. Requires an active network. Safe to call multiple times;
+  /// short-circuits once the FCM token has been captured.
+  Future<void> _pullNetworkArtifacts() {
+    final existing = _pullFuture;
+    if (existing != null) return existing;
+    if (_networkArtifactsPulled) return Future<void>.value();
+
+    final fut = _pullNetworkArtifactsInner();
+    _pullFuture = fut;
+    return fut.whenComplete(() {
+      _pullFuture = null;
+    });
+  }
+
+  Future<void> _pullNetworkArtifactsInner() async {
+    final fcm = _fcm;
+    if (fcm == null) return;
+
+    try {
+      final token = await fcm.getToken().timeout(const Duration(seconds: 8));
+      if (token != null && token.isNotEmpty) {
+        _token = token;
+        _networkArtifactsPulled = true;
+        onTokenRotate?.call(token);
+      }
+
+      // Cold-tap payload — only meaningful the first time we come
+      // online after a launch. Guarded internally by the vault
+      // (writeColdTapLink overwrites, pluckColdTapLink consumes).
+      final initial = await fcm.getInitialMessage();
+      if (initial != null) {
+        await _onColdTap(initial);
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[alert] network artifacts pull failed: $e');
+      }
+    }
+  }
+
+  /// Called by the shell whenever connectivity returns. Idempotent — a
+  /// no-op if we already hold a token.
+  Future<void> reattemptWithNetwork() async {
+    if (!_booted) {
+      await ignite();
+      return;
+    }
+    if (_networkArtifactsPulled && _token != null) return;
+    await _pullNetworkArtifacts();
   }
 
   Future<void> _prepareLocalPlugin() async {
