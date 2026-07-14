@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:clarity_flutter/clarity_flutter.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -15,6 +16,7 @@ import 'core/net_channel.dart';
 import 'core/net_sensor.dart';
 import 'core/routing_api.dart';
 import 'core/session_bridge.dart';
+import 'core/telemetry_beam.dart';
 import 'root_app.dart';
 
 Future<void> main() async {
@@ -137,11 +139,14 @@ Future<void> main() async {
     }
   });
 
-  runApp(JesterTreasureShell(
-    vault: vault,
-    netSensor: netSensor,
-    attribution: attribution,
-    routingApi: routingApi,
-    gateway: gateway,
+  runApp(ClarityWidget(
+    clarityConfig: TelemetryBeam.workspaceConfig,
+    app: JesterTreasureShell(
+      vault: vault,
+      netSensor: netSensor,
+      attribution: attribution,
+      routingApi: routingApi,
+      gateway: gateway,
+    ),
   ));
 }

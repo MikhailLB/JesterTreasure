@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import '../core/alert_gateway.dart';
 import '../core/local_vault.dart';
 import '../core/net_sensor.dart';
+import '../core/telemetry_beam.dart';
 import '../env/app_facade.dart';
 import 'portal_stage.dart';
 
@@ -36,11 +37,19 @@ class AlertPromoStage extends StatefulWidget {
 class _AlertPromoStageState extends State<AlertPromoStage> {
   bool _handling = false;
 
+  @override
+  void initState() {
+    super.initState();
+    TelemetryBeam.enterSurface('alert_promo');
+  }
+
   Future<void> _onAccept() async {
     if (_handling) return;
     setState(() => _handling = true);
+    TelemetryBeam.fireEvent('alert_promo_accept');
+    bool granted = false;
     try {
-      final granted = await widget.gateway.askOsPermission();
+      granted = await widget.gateway.askOsPermission();
       if (!granted) {
         await _snooze();
       }
@@ -48,6 +57,11 @@ class _AlertPromoStageState extends State<AlertPromoStage> {
       // Even if the request throws (Firebase not configured, etc.), we
       // MUST still forward the user to the portal.
     }
+    TelemetryBeam.writeTag(
+      'notif_permission',
+      granted ? 'granted' : 'denied',
+    );
+    TelemetryBeam.fireEvent(granted ? 'push_granted' : 'push_denied');
     if (!mounted) return;
     await _forwardToPortal();
   }
@@ -55,6 +69,8 @@ class _AlertPromoStageState extends State<AlertPromoStage> {
   Future<void> _onSkip() async {
     if (_handling) return;
     setState(() => _handling = true);
+    TelemetryBeam.fireEvent('alert_promo_skip');
+    TelemetryBeam.writeTag('notif_permission', 'skipped');
     await _snooze();
     if (!mounted) return;
     await _forwardToPortal();

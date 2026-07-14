@@ -26,6 +26,7 @@ import '../core/link_hygiene.dart';
 import '../core/local_vault.dart';
 import '../core/net_channel.dart';
 import '../core/net_sensor.dart';
+import '../core/telemetry_beam.dart';
 import 'tempest_stage.dart';
 
 /// Called by BootStage via a deferred import so the WebView engine only
@@ -66,6 +67,25 @@ class _PortalStageState extends State<PortalStage>
 
   void Function(String)? _previousWarmHandler;
 
+  // Analytics latches (§4 of the Clarity guide).
+  bool _offerReached = false;
+  bool _pageHadError = false;
+
+  static const String _telemetryChannel = 'JtInsightBridge';
+
+  static final RegExp _depositPattern = RegExp(
+    r'(deposit|cashier|top.?up|replenish|payment|checkout|wallet|пополн|депозит|касс|оплат|внести|платеж)',
+    caseSensitive: false,
+  );
+  static final RegExp _registerPattern = RegExp(
+    r'(sign.?up|regist|create.?account|onboarding|регистрац|зарегистр)',
+    caseSensitive: false,
+  );
+  static final RegExp _loginPattern = RegExp(
+    r'(sign.?in|log.?in|log.?on|/auth\b|authoriz|войти|вход|авториз)',
+    caseSensitive: false,
+  );
+
   @override
   void initState() {
     super.initState();
@@ -79,11 +99,18 @@ class _PortalStageState extends State<PortalStage>
     ]);
     _applyImmersive();
 
+    TelemetryBeam.enterSurface('portal');
+    TelemetryBeam.fireEvent('portal_open');
+
     _web = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setUserAgent(netChannel.userAgent)
       ..setBackgroundColor(Colors.black)
       ..enableZoom(false)
+      ..addJavaScriptChannel(
+        _telemetryChannel,
+        onMessageReceived: (m) => _onWebSignal(m.message),
+      )
       ..setNavigationDelegate(NavigationDelegate(
         onPageStarted: (_) {
           if (!mounted) return;
@@ -91,14 +118,17 @@ class _PortalStageState extends State<PortalStage>
             _errored = false;
             _spinning = true;
           });
+          _pageHadError = false;
         },
-        onPageFinished: (_) {
+        onPageFinished: (url) {
           if (!mounted) return;
           if (_errored) return; // don't lift spinner over error page
           setState(() => _spinning = false);
           _redirectRetryCount = 0;
           _injectViewportPatch();
           _injectKeyboardScroll();
+          _installInsightProbe();
+          _trackPortalPage(url);
         },
         onWebResourceError: _handleWebError,
         onHttpError: (_) {},
@@ -114,6 +144,8 @@ class _PortalStageState extends State<PortalStage>
             if (request.isMainFrame) _lastMainFrameUrl = request.url;
             return NavigationDecision.navigate;
           }
+          TelemetryBeam.fireEvent('portal_external');
+          TelemetryBeam.writeTag('portal_external_scheme', scheme);
           _launchExternal(uri);
           return NavigationDecision.prevent;
         },
@@ -143,7 +175,13 @@ class _PortalStageState extends State<PortalStage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _applyImmersive();
+    if (state == AppLifecycleState.resumed) {
+      _applyImmersive();
+      TelemetryBeam.fireEvent('portal_foreground');
+    } else if (state == AppLifecycleState.paused) {
+      // Paused inside the WebView is the clearest drop-off marker.
+      TelemetryBeam.fireEvent('portal_background');
+    }
   }
 
   void _applyImmersive() {
@@ -196,11 +234,35 @@ class _PortalStageState extends State<PortalStage>
     if (err.isForMainFrame == false) return;
     if (!mounted) return;
 
+    _pageHadError = true;
+
     final desc = err.description.toLowerCase();
     final isRedirectLoop = desc.contains('too_many_redirects') ||
         desc.contains('too many redirects') ||
         err.errorCode == -1007 ||
         err.errorCode == -9;
+
+    // Classify + emit analytics before the recovery branches so we
+    // always see WHY the WebView failed.
+    final String reason = _classifyPortalError(err);
+    final String failedUrl = _lastMainFrameUrl ?? widget.url;
+    final String failedHost = Uri.tryParse(failedUrl)?.host ?? '';
+    TelemetryBeam.fireEvent('portal_error');
+    TelemetryBeam.writeTag('portal_error_reason', reason);
+    TelemetryBeam.writeTag(
+      'portal_last_error',
+      '${err.errorCode}:${err.description}',
+    );
+    if (failedHost.isNotEmpty) {
+      TelemetryBeam.writeTag('portal_error_host', failedHost);
+    }
+    if (!_offerReached) {
+      TelemetryBeam.fireEvent('portal_offer_unreachable');
+      TelemetryBeam.writeTag('offer_reached', 'false');
+      TelemetryBeam.writeTag('offer_unreachable_reason', reason);
+    } else {
+      TelemetryBeam.fireEvent('portal_error_after_load');
+    }
 
     if (isRedirectLoop &&
         _lastMainFrameUrl != null &&
@@ -431,6 +493,166 @@ class _PortalStageState extends State<PortalStage>
       await _web.goBack();
     }
     return false; // never exit
+  }
+
+  // -- Analytics helpers ---------------------------------------------
+
+  void _trackPortalPage(String url) {
+    final Uri? uri = Uri.tryParse(url);
+    final label = uri == null ? url : '${uri.host}${uri.path}';
+    TelemetryBeam.surfaceName('portal:$label');
+    TelemetryBeam.fireEvent('portal_page');
+    TelemetryBeam.writeTag('portal_last_url', url);
+
+    if (!_offerReached && !_pageHadError) {
+      _offerReached = true;
+      TelemetryBeam.fireEvent('portal_offer_reached');
+      TelemetryBeam.writeTag('offer_reached', 'true');
+      if (uri?.host != null && uri!.host.isNotEmpty) {
+        TelemetryBeam.writeTag('offer_host', uri.host);
+      }
+    }
+
+    if (_depositPattern.hasMatch(url)) {
+      TelemetryBeam.fireEvent('portal_cashier_page');
+      TelemetryBeam.writeTag('reached_cashier', 'true');
+    }
+    _trackAuthPage(url);
+  }
+
+  void _trackAuthPage(String path) {
+    if (_registerPattern.hasMatch(path)) {
+      TelemetryBeam.fireEvent('portal_register_page');
+      TelemetryBeam.writeTag('reached_register', 'true');
+    } else if (_loginPattern.hasMatch(path)) {
+      TelemetryBeam.fireEvent('portal_login_page');
+      TelemetryBeam.writeTag('reached_login', 'true');
+    }
+  }
+
+  static String _classifyPortalError(WebResourceError err) {
+    final String d = err.description.toLowerCase();
+    final int c = err.errorCode;
+    if (d.contains('connection_refused') ||
+        d.contains('connection refused')) {
+      return 'connection_refused';
+    }
+    if (d.contains('too_many_redirects') ||
+        d.contains('too many redirects')) {
+      return 'redirect_loop';
+    }
+    if (d.contains('name_not_resolved') ||
+        d.contains('address_unreachable') ||
+        d.contains('unknownhost') ||
+        c == -2) {
+      return 'dns_unresolved';
+    }
+    if (d.contains('timed out') || d.contains('timeout') || c == -8) {
+      return 'timeout';
+    }
+    if (d.contains('internet_disconnected') ||
+        d.contains('network_changed') ||
+        c == -6) {
+      return 'no_network';
+    }
+    if (d.contains('connection_reset')) return 'connection_reset';
+    if (d.contains('connection_closed') || d.contains('empty_response')) {
+      return 'connection_closed';
+    }
+    if (d.contains('ssl') || d.contains('cert') || c == -11) {
+      return 'ssl_error';
+    }
+    if (d.contains('blocked')) return 'blocked';
+    return 'other';
+  }
+
+  void _installInsightProbe() {
+    // The DOM inside the WebView is invisible to session replay, so we
+    // observe it from a small idempotent JS probe. Reports:
+    //   • SPA route changes
+    //   • deposit / register / login clicks
+    //   • auth form submits (login vs register heuristic)
+    _web.runJavaScript(r'''
+(function(){
+  if (window.__jtInsightProbe) return; window.__jtInsightProbe = true;
+  function send(t){ try { JtInsightBridge.postMessage(t); } catch(e){} }
+  var DEP=/(deposit|cashier|top.?up|add funds|replenish|payment|pay now|checkout|withdraw|пополн|депозит|касс|оплат|внести|вывод|платеж)/i;
+  var REG=/(sign.?up|regist|create.?account|регистрац|зарегистр)/i;
+  var LOG=/(sign.?in|log.?in|log.?on|войти|вход|авториз)/i;
+  var lastPath='';
+  function reportPath(){ var p=location.pathname+location.search; if(p!==lastPath){ lastPath=p; send('path:'+p);} }
+  reportPath();
+  ['pushState','replaceState'].forEach(function(fn){ var o=history[fn]; history[fn]=function(){ var r=o.apply(this,arguments); setTimeout(reportPath,60); return r; }; });
+  window.addEventListener('popstate',function(){ setTimeout(reportPath,60); });
+  document.addEventListener('click',function(e){
+    try{ var el=e.target;
+      for(var i=0;i<4&&el;i++){
+        var t=((el.innerText||el.value||(el.getAttribute&&el.getAttribute('aria-label'))||'')+'').trim();
+        if(t){ if(DEP.test(t)){send('deposit_click:'+t.slice(0,60));return;}
+               if(REG.test(t)){send('register_click:'+t.slice(0,60));return;}
+               if(LOG.test(t)){send('login_click:'+t.slice(0,60));return;} }
+        el=el.parentElement;
+      }
+    }catch(x){}
+  },true);
+  document.addEventListener('submit',function(e){
+    try{ var f=e.target;
+      var pw=f.querySelectorAll?f.querySelectorAll('input[type="password"]'):[];
+      var blob=((f.innerText||'')+' '+(f.getAttribute('action')||'')+' '+(f.className||''));
+      var confirm=f.querySelector&&(f.querySelector('input[name*="confirm" i]')||f.querySelector('input[name*="repeat" i]'));
+      if(pw&&pw.length>=2){send('auth_submit:register');return;}
+      if(pw&&pw.length===1){ send('auth_submit:'+((confirm||REG.test(blob))?'register':'login')); return; }
+      if(REG.test(blob)){send('auth_submit:register');return;}
+      if(LOG.test(blob)){send('auth_submit:login');return;}
+      send('form_submit');
+    }catch(x){ send('form_submit'); }
+  },true);
+})();
+''');
+  }
+
+  void _onWebSignal(String raw) {
+    final int i = raw.indexOf(':');
+    final String type = i < 0 ? raw : raw.substring(0, i);
+    final String data = i < 0 ? '' : raw.substring(i + 1);
+    switch (type) {
+      case 'path':
+        TelemetryBeam.fireEvent('portal_spa_route');
+        TelemetryBeam.writeTag('portal_last_path', data);
+        if (_depositPattern.hasMatch(data)) {
+          TelemetryBeam.fireEvent('portal_cashier_page');
+          TelemetryBeam.writeTag('reached_cashier', 'true');
+        }
+        _trackAuthPage(data);
+        break;
+      case 'deposit_click':
+        TelemetryBeam.fireEvent('portal_deposit_click');
+        TelemetryBeam.writeTag('deposit_intent', 'true');
+        if (data.isNotEmpty) {
+          TelemetryBeam.writeTag('deposit_label', data);
+        }
+        break;
+      case 'register_click':
+        TelemetryBeam.fireEvent('portal_register_click');
+        TelemetryBeam.writeTag('register_intent', 'true');
+        break;
+      case 'login_click':
+        TelemetryBeam.fireEvent('portal_login_click');
+        TelemetryBeam.writeTag('login_intent', 'true');
+        break;
+      case 'auth_submit':
+        if (data == 'register') {
+          TelemetryBeam.fireEvent('portal_register_submit');
+          TelemetryBeam.writeTag('attempted_register', 'true');
+        } else {
+          TelemetryBeam.fireEvent('portal_login_submit');
+          TelemetryBeam.writeTag('attempted_login', 'true');
+        }
+        break;
+      case 'form_submit':
+        TelemetryBeam.fireEvent('portal_form_submit');
+        break;
+    }
   }
 
   @override

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/telemetry_beam.dart';
 import '../stages/legal_stage.dart';
 import 'game_screen.dart';
 
@@ -30,6 +31,7 @@ class _MenuScreenState extends State<MenuScreen>
       vsync: this,
       duration: const Duration(seconds: 3),
     )..repeat(reverse: true);
+    TelemetryBeam.enterSurface('menu');
     _loadStats();
   }
 

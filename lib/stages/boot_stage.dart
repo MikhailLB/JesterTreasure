@@ -27,6 +27,7 @@ import '../core/link_hygiene.dart';
 import '../core/local_vault.dart';
 import '../core/net_sensor.dart';
 import '../core/routing_api.dart';
+import '../core/telemetry_beam.dart';
 import '../data/route_mode.dart';
 import '../data/routing_verdict.dart';
 import '../env/app_facade.dart';
@@ -78,6 +79,7 @@ class _BootStageState extends State<BootStage>
     // any token arriving AFTER BootStage handed off to the portal/
     // arena was silently dropped and the backend never learned the
     // device address. Do not touch `gateway.onTokenRotate` here.
+    TelemetryBeam.enterSurface('boot');
     _drive();
   }
 
@@ -112,6 +114,7 @@ class _BootStageState extends State<BootStage>
     if (coldTap != null) {
       final sanitised = sanitiseInboundLink(coldTap);
       if (sanitised != null) {
+        TelemetryBeam.fireEvent('route_push_link');
         _liftBar(1.0);
         await Future<void>.delayed(const Duration(milliseconds: 350));
         if (!mounted) return;
@@ -141,6 +144,7 @@ class _BootStageState extends State<BootStage>
 
   Future<void> _firstLaunch() async {
     if (!await widget.netSensor.canReachInternet()) {
+      TelemetryBeam.fireEvent('route_offline');
       _openTempestBackToBoot();
       return;
     }
@@ -175,18 +179,23 @@ class _BootStageState extends State<BootStage>
       locale: locale,
       pushToken: widget.gateway.pushToken,
     );
+    _bindAttribution(body);
 
     _liftBar(0.9);
     final verdict = await widget.routingApi.dispatch(body);
 
     if (verdict.ok && verdict.hasUrl) {
       await widget.vault.stampMode(RouteMode.portal);
+      TelemetryBeam.writeTag('run_mode', 'portal');
+      TelemetryBeam.fireEvent('route_portal');
       _liftBar(1.0);
       await Future<void>.delayed(const Duration(milliseconds: 320));
       if (!mounted) return;
       _navigateToPortal(verdict.url!);
     } else {
       await widget.vault.stampMode(RouteMode.arena);
+      TelemetryBeam.writeTag('run_mode', 'arena');
+      TelemetryBeam.fireEvent('route_arena');
       _liftBar(1.0);
       await Future<void>.delayed(const Duration(milliseconds: 320));
       if (!mounted) return;
@@ -198,6 +207,7 @@ class _BootStageState extends State<BootStage>
 
   Future<void> _resumePortal() async {
     if (!await widget.netSensor.canReachInternet()) {
+      TelemetryBeam.fireEvent('route_offline');
       _openTempestBackToBoot();
       return;
     }
@@ -222,6 +232,7 @@ class _BootStageState extends State<BootStage>
       locale: locale,
       pushToken: widget.gateway.pushToken,
     );
+    _bindAttribution(body);
 
     final verdict = await widget.routingApi.dispatch(body);
     _liftBar(1.0);
@@ -230,17 +241,37 @@ class _BootStageState extends State<BootStage>
 
     final RoutingVerdict v = verdict;
     if (v.ok && v.hasUrl) {
+      TelemetryBeam.writeTag('run_mode', 'portal');
+      TelemetryBeam.fireEvent('route_portal');
       _navigateToPortal(v.url!);
     } else if (cached != null && cached.isNotEmpty) {
+      TelemetryBeam.writeTag('run_mode', 'portal');
+      TelemetryBeam.fireEvent('route_cached_link');
       _navigateToPortal(cached);
     } else {
+      TelemetryBeam.fireEvent('route_offline');
       _openTempestBackToBoot();
     }
+  }
+
+  void _bindAttribution(Map<String, dynamic> body) {
+    TelemetryBeam.bindUser(
+      body['af_id']?.toString(),
+      tags: <String, String>{
+        'af_status': body['af_status']?.toString() ?? '',
+        'media_source': body['media_source']?.toString() ?? '',
+        'campaign': body['campaign']?.toString() ?? '',
+        'os': body['os']?.toString() ?? '',
+        'locale': body['locale']?.toString() ?? '',
+      },
+    );
   }
 
   // -- Arena resume flow ---------------------------------------------
 
   Future<void> _resumeArena() async {
+    TelemetryBeam.writeTag('run_mode', 'arena');
+    TelemetryBeam.fireEvent('route_arena');
     _liftBar(0.4);
     // The arena preload lives inside MenuScreen's own bootstrap; nothing
     // extra to fetch here. Keep a subtle bar animation for polish.
@@ -285,6 +316,17 @@ class _BootStageState extends State<BootStage>
       );
       return;
     }
+
+    // Returning user — promo is skipped. Classify their permission
+    // state so the tag is never blank on the dashboard.
+    TelemetryBeam.writeTag(
+      'notif_permission',
+      widget.vault.promoGranted()
+          ? 'granted'
+          : widget.vault.promoOsBlocked()
+              ? 'os_denied'
+              : 'snoozed',
+    );
 
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(

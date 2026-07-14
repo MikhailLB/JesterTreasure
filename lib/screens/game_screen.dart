@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/telemetry_beam.dart';
+
 enum EnemyType { goblin, mimic }
 
 class Enemy {
@@ -176,6 +178,7 @@ class _GameScreenState extends State<GameScreen>
   void initState() {
     super.initState();
     _ticker = createTicker(_onTick);
+    TelemetryBeam.enterSurface('game');
     _bootstrap();
   }
 
@@ -201,6 +204,7 @@ class _GameScreenState extends State<GameScreen>
   }
 
   void _startGame() {
+    TelemetryBeam.fireEvent('game_start');
     _score = 0;
     _coinsThisRun = 0;
     _burstMeter = 0;
@@ -470,6 +474,8 @@ class _GameScreenState extends State<GameScreen>
     _shakeT = 0.5;
     _shakeAmount = 12;
     HapticFeedback.mediumImpact();
+    TelemetryBeam.fireEvent('game_over');
+    TelemetryBeam.writeTag('last_score', '$_score');
     await _persistResults();
     if (!mounted) return;
     setState(() {

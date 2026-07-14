@@ -8,6 +8,8 @@
 
 import 'package:flutter/material.dart';
 
+import '../core/telemetry_beam.dart';
+
 class TempestStage extends StatefulWidget {
   final WidgetBuilder onRetry;
 
@@ -29,6 +31,7 @@ class _TempestStageState extends State<TempestStage>
       vsync: this,
       duration: const Duration(milliseconds: 2200),
     )..repeat(reverse: true);
+    TelemetryBeam.enterSurface('tempest');
   }
 
   @override
@@ -40,6 +43,7 @@ class _TempestStageState extends State<TempestStage>
   Future<void> _handleRetry() async {
     if (_reconnecting) return;
     setState(() => _reconnecting = true);
+    TelemetryBeam.fireEvent('tempest_retry');
     await Future<void>.delayed(const Duration(milliseconds: 650));
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
