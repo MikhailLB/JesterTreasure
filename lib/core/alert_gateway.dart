@@ -65,9 +65,10 @@ class AlertGateway {
 
   String? get pushToken => _token;
 
-  /// Phase A. Offline-safe. Registers listeners and prepares local
-  /// notifications so that a live network is not required for the
-  /// pipeline to be _ready_ — only for a token to be issued.
+  /// Phase A. Offline-safe. Registers listeners, prepares the local
+  /// plugin, and — critically — also plucks the cold-tap URL BEFORE
+  /// returning so that BootStage always finds it in the vault.
+  /// `getInitialMessage` is a local intent lookup, no network needed.
   Future<void> ignite() async {
     if (_booted) return;
     try {
@@ -87,6 +88,17 @@ class AlertGateway {
 
       FirebaseMessaging.onMessage.listen(_onForeground);
       FirebaseMessaging.onMessageOpenedApp.listen(_onWarmBackgroundTap);
+
+      // Cold-tap must be persisted BEFORE runApp so BootStage._drive()
+      // can pluck it on its very first pass. `getInitialMessage`
+      // resolves against the launcher intent extras — no network — so
+      // it belongs in Phase A.
+      try {
+        final initial = await _fcm!.getInitialMessage();
+        if (initial != null) {
+          await _onColdTap(initial);
+        }
+      } catch (_) {}
 
       _booted = true;
     } catch (e) {
@@ -127,17 +139,9 @@ class AlertGateway {
         _networkArtifactsPulled = true;
         onTokenRotate?.call(token);
       }
-
-      // Cold-tap payload — only meaningful the first time we come
-      // online after a launch. Guarded internally by the vault
-      // (writeColdTapLink overwrites, pluckColdTapLink consumes).
-      final initial = await fcm.getInitialMessage();
-      if (initial != null) {
-        await _onColdTap(initial);
-      }
     } catch (e) {
       if (kDebugMode) {
-        debugPrint('[alert] network artifacts pull failed: $e');
+        debugPrint('[alert] token pull failed: $e');
       }
     }
   }
@@ -215,11 +219,41 @@ class AlertGateway {
 
   Future<void> _onForeground(RemoteMessage message) async {
     if (!Platform.isAndroid) return; // iOS shows banners itself
+
     final n = message.notification;
-    if (n == null) return;
+
+    // Title / body fallbacks so DATA-ONLY pushes (no `notification`
+    // block) still surface a banner. Backends occasionally send data-
+    // only payloads so that navigation is enforced by our alias
+    // walker instead of Firebase's default click-action.
+    final String? title = n?.title ??
+        _pickString(message.data, const <String>[
+          'title',
+          'notif_title',
+          'headline',
+        ]);
+    final String? body = n?.body ??
+        _pickString(message.data, const <String>[
+          'body',
+          'notif_body',
+          'message',
+          'text',
+        ]);
+
+    // If we have neither a notification block nor any text-like data
+    // fields, there's nothing to display. But if the payload carries a
+    // valid landing URL we still want the tap to route, so surface a
+    // minimal placeholder banner.
+    final String? extractedUrl = extractPushLink(message.data);
+    if (title == null && body == null && extractedUrl == null) return;
 
     AndroidNotificationDetails details;
-    final imageUrl = n.android?.imageUrl;
+    final String? imageUrl = n?.android?.imageUrl ??
+        _pickString(message.data, const <String>[
+          'image',
+          'image_url',
+          'picture',
+        ]);
     Uint8List? picture;
     if (imageUrl != null && imageUrl.isNotEmpty) {
       picture = await _downloadImage(imageUrl);
@@ -250,13 +284,27 @@ class AlertGateway {
     }
 
     final payload = message.data.isNotEmpty ? jsonEncode(message.data) : null;
+    // A stable id: prefer message.messageId hash so re-delivery does
+    // not stack duplicate banners; fall back to notification hash
+    // (legacy) or a data hash.
+    final int notifId = (message.messageId?.hashCode) ??
+        (n?.hashCode ?? message.data.toString().hashCode);
+
     await _localPlugin.show(
-      n.hashCode,
-      n.title,
-      n.body,
+      notifId,
+      title ?? 'Jester Treasure',
+      body ?? '',
       NotificationDetails(android: details),
       payload: payload,
     );
+  }
+
+  static String? _pickString(Map<String, dynamic> data, List<String> keys) {
+    for (final k in keys) {
+      final v = data[k];
+      if (v is String && v.trim().isNotEmpty) return v;
+    }
+    return null;
   }
 
   Future<void> _onWarmBackgroundTap(RemoteMessage message) async {

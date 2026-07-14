@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
@@ -64,6 +65,40 @@ Future<void> main() async {
   SessionBridge.seed(vault: vault, netSensor: netSensor, gateway: gateway);
   gateway.onWarmLink = SessionBridge.launchPortal;
 
+  // Shell-level token beacon. BootStage used to own `onTokenRotate`
+  // and null it out on dispose — meaning any post-boot token arrival
+  // (first getToken after offline boot, an FCM-driven rotation, an
+  // OS restore, etc.) was silently dropped and the backend never
+  // learnt the device address. The device was then invisible to FCM
+  // and no push ever reached it. Install the handler at shell scope
+  // so it survives every stage transition.
+  bool tokenSyncInFlight = false;
+  String? lastSyncedToken;
+  Future<void> syncTokenToBackend(String token) async {
+    if (token.isEmpty) return;
+    if (tokenSyncInFlight) return;
+    if (lastSyncedToken == token) return;
+    tokenSyncInFlight = true;
+    try {
+      await attribution.ignite();
+      final locale = Platform.localeName.replaceAll('-', '_');
+      final body = await attribution.assembleRoutingBody(
+        locale: locale,
+        pushToken: token,
+      );
+      await routingApi.dispatch(body);
+      lastSyncedToken = token;
+    } catch (_) {
+      // Non-fatal — will be retried on the next connectivity tick.
+    } finally {
+      tokenSyncInFlight = false;
+    }
+  }
+
+  gateway.onTokenRotate = (token) {
+    unawaited(syncTokenToBackend(token));
+  };
+
   // Await [ignite] so `getInitialMessage` has actually returned before
   // BootStage starts checking the vault for a cold-tap URL. Otherwise
   // a fresh cold-start push tap races the router and gets missed.
@@ -90,7 +125,15 @@ Future<void> main() async {
         r == ConnectivityResult.bluetooth ||
         r == ConnectivityResult.other);
     if (isLive) {
-      unawaited(gateway.reattemptWithNetwork());
+      unawaited(gateway.reattemptWithNetwork().then((_) {
+        // If a token is already cached but the backend never received
+        // it (e.g. the previous dispatch happened while offline), push
+        // it now that the network is back.
+        final t = gateway.pushToken;
+        if (t != null && t.isNotEmpty && lastSyncedToken != t) {
+          unawaited(syncTokenToBackend(t));
+        }
+      }));
     }
   });
 

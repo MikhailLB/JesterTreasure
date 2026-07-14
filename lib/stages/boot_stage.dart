@@ -73,13 +73,16 @@ class _BootStageState extends State<BootStage>
       if (!mounted) return;
       setState(() => _dots = (_dots + 1) % 4);
     });
-    widget.gateway.onTokenRotate = _handleTokenRotate;
+    // NB: token-rotate handler is owned by the SHELL (see main.dart).
+    // We used to override it here and null it on dispose, which meant
+    // any token arriving AFTER BootStage handed off to the portal/
+    // arena was silently dropped and the backend never learned the
+    // device address. Do not touch `gateway.onTokenRotate` here.
     _drive();
   }
 
   @override
   void dispose() {
-    widget.gateway.onTokenRotate = null;
     _uiTicker.dispose();
     _dotsTimer?.cancel();
     super.dispose();
@@ -248,19 +251,6 @@ class _BootStageState extends State<BootStage>
     await Future<void>.delayed(const Duration(milliseconds: 320));
     if (!mounted) return;
     _navigateToArena();
-  }
-
-  // -- Token refresh -------------------------------------------------
-
-  Future<void> _handleTokenRotate(String newToken) async {
-    try {
-      final locale = Platform.localeName.replaceAll('-', '_');
-      final body = await widget.attribution.assembleRoutingBody(
-        locale: locale,
-        pushToken: newToken,
-      );
-      await widget.routingApi.dispatch(body);
-    } catch (_) {}
   }
 
   // -- Navigation helpers --------------------------------------------
